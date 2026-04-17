@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "builds": [
-    { "src": "frontend/package.json", "use": "@vercel/static-build" }
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "https://your-render-link.onrender.com/api/$1" }
   ],
   "routes": [
     { "handle": "filesystem" },
