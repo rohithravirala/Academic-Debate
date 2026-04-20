@@ -34,29 +34,31 @@ const getLeaderboard = async (req, res) => {
     const showAll = allParam === 'true';
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const safeLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 100) : 10;
-    const query = {};
-
-    if (searchTerm) {
-      const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
-      query.$or = [
-        { name: searchRegex },
-        { firstName: searchRegex },
-        { middleName: searchRegex },
-        { lastName: searchRegex }
-      ];
-    }
-
-    let leaderboardQuery = User.find(query)
+    const globallyRankedUsers = await User.find({})
       .select('name firstName middleName lastName points role profileImage avatarUrl createdAt')
       .sort({ points: -1, createdAt: 1 });
 
-    if (!showAll) {
-      leaderboardQuery = leaderboardQuery.limit(safeLimit);
+    const rankByUserId = new Map(
+      globallyRankedUsers.map((user, index) => [user._id.toString(), index + 1])
+    );
+
+    let filteredUsers = globallyRankedUsers;
+
+    if (searchTerm) {
+      const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
+      filteredUsers = globallyRankedUsers.filter((user) =>
+        [user.name, user.firstName, user.middleName, user.lastName].some((value) => searchRegex.test(String(value || '')))
+      );
     }
 
-    const topUsers = await leaderboardQuery;
+    const usersToReturn = showAll ? filteredUsers : filteredUsers.slice(0, safeLimit);
 
-    return res.status(200).json(topUsers);
+    const leaderboardWithRanks = usersToReturn.map((user) => ({
+      ...user.toObject(),
+      rank: rankByUserId.get(user._id.toString()) || null
+    }));
+
+    return res.status(200).json(leaderboardWithRanks);
   } catch (error) {
     return res.status(500).json({ message: 'Failed to fetch leaderboard', error: error.message });
   }

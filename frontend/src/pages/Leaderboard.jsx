@@ -143,15 +143,16 @@ function Leaderboard() {
             <div className="leaderboard-rows-modern leaderboard-container">
               {leaders.map((leader, index) => {
                 const displayName = composeDisplayName(leader);
-                const isTopRank = index === 0;
-                const isTopThree = index < 3;
+                const displayRank = Number.isInteger(leader?.rank) ? leader.rank : index + 1;
+                const isTopRank = displayRank === 1;
+                const isTopThree = displayRank <= 3;
 
                 return (
                   <article
                     key={leader._id || `${displayName}-${index}`}
                     className={`leaderboard-row-modern ${isTopRank ? 'leaderboard-row-top' : ''} ${isTopThree ? 'leaderboard-row-top-three' : ''}`}
                   >
-                    <div className={`leaderboard-rank-pill ${isTopRank ? 'rank-one' : ''}`}>#{index + 1}</div>
+                    <div className={`leaderboard-rank-pill ${isTopRank ? 'rank-one' : ''}`}>#{displayRank}</div>
 
                     <button
                       type="button"
@@ -233,7 +234,7 @@ function Leaderboard() {
             <div className="leaderboard-lightbox-meta">
               <strong>{composeDisplayName(selectedLeader)}</strong>
               <span>
-                Rank #{selectedLeaderIndex + 1} • {selectedLeader.points ?? 0} points
+                Rank #{Number.isInteger(selectedLeader?.rank) ? selectedLeader.rank : selectedLeaderIndex + 1} • {selectedLeader.points ?? 0} points
               </span>
             </div>
           </div>
