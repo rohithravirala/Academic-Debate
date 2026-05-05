@@ -11,13 +11,21 @@ const isTruthy = (value) => String(value).toLowerCase() === 'true';
 let cachedTransporter = null;
 let transporterVerified = false;
 
+const stripWhitespace = (value) => String(value || '').replace(/\s+/g, '').trim();
+
 const getSmtpConfig = () => {
-  const service = normalizeWhitespace(process.env.SMTP_SERVICE);
-  const host = normalizeWhitespace(process.env.SMTP_HOST);
+  const service = stripWhitespace(process.env.SMTP_SERVICE);
+  const host = stripWhitespace(process.env.SMTP_HOST);
   const port = toInt(process.env.SMTP_PORT, 587);
   const secure = isTruthy(process.env.SMTP_SECURE);
-  const user = normalizeWhitespace(process.env.SMTP_USER);
-  const pass = normalizeWhitespace(process.env.SMTP_PASS);
+  const user = stripWhitespace(process.env.SMTP_USER);
+  const pass = stripWhitespace(process.env.SMTP_PASS);
+
+  // Strip potential literal quotes if they were added in the hosting dashboard
+  let from = normalizeWhitespace(process.env.SMTP_FROM || '');
+  if (from.startsWith('"') && from.endsWith('"')) {
+    from = from.slice(1, -1);
+  }
 
   return {
     service,
@@ -26,7 +34,7 @@ const getSmtpConfig = () => {
     secure,
     user,
     pass,
-    from: normalizeWhitespace(process.env.SMTP_FROM) || 'no-reply@academicdebate.local',
+    from: from || 'no-reply@academicdebate.local',
     fallbackAllowed: isTruthy(process.env.SMTP_ALLOW_FALLBACK)
   };
 };
