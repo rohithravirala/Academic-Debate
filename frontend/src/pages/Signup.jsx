@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
@@ -11,21 +11,58 @@ const ROLE_OPTIONS = [
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function Signup() {
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: '' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', role: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpToken, setOtpToken] = useState('');
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [resendSeconds, setResendSeconds] = useState(0);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!otpSent || otpVerified) return;
+    if (secondsLeft <= 0) return;
+
+    const timer = setInterval(() => {
+      setSecondsLeft((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [otpSent, otpVerified, secondsLeft]);
+
+  useEffect(() => {
+    if (resendSeconds <= 0) return;
+
+    const timer = setInterval(() => {
+      setResendSeconds((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [resendSeconds]);
+
+  const formatSeconds = (value) => {
+    const mins = Math.floor(value / 60);
+    const secs = value % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  };
 
   const updateField = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const handleSendOtp = async () => {
     setError('');
     setSuccess('');
+
+    if (!form.name.trim()) {
+      setError('Full name is required');
+      return;
+    }
 
     if (!form.role) {
       setError('Please select a role');
@@ -37,8 +74,80 @@ function Signup() {
       return;
     }
 
+    setLoading(true);
+    try {
+      await api.post('/api/auth/send-otp', {
+        email: form.email,
+        purpose: 'signup'
+      });
+
+      setOtpSent(true);
+      setOtpVerified(false);
+      setOtpToken('');
+      setOtp('');
+      setSecondsLeft(300);
+      setResendSeconds(60);
+      setSuccess('OTP sent to your email');
+    } catch (apiError) {
+      const fallbackMessage =
+        apiError?.code === 'ERR_NETWORK'
+          ? 'Cannot reach server. Please ensure backend is running on port 5001.'
+          : 'Failed to send OTP';
+      setError(apiError.response?.data?.message || fallbackMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    setError('');
+    setSuccess('');
+
+    if (!/^\d{6}$/.test(otp)) {
+      setError('Enter a valid 6-digit OTP');
+      return;
+    }
+
+    if (secondsLeft <= 0) {
+      setError('OTP expired. Please resend OTP.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data } = await api.post('/api/auth/verify-otp', {
+        email: form.email,
+        otp,
+        purpose: 'signup'
+      });
+
+      setOtpVerified(true);
+      setOtpToken(data.otpToken || '');
+      setSuccess('OTP verified. You can now set your password.');
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Failed to verify OTP');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (!otpVerified || !otpToken) {
+      setError('Please verify OTP before creating your account');
+      return;
+    }
+
     if (String(form.password).length < 6) {
       setError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (form.password !== form.confirmPassword) {
+      setError('Passwords do not match');
       return;
     }
 
@@ -49,7 +158,8 @@ function Signup() {
         name: form.name,
         email: form.email,
         password: form.password,
-        role: form.role
+        role: form.role,
+        otpToken
       });
 
       localStorage.setItem('token', data.token);
@@ -83,6 +193,7 @@ function Signup() {
                 placeholder="Your full name"
                 value={form.name}
                 onChange={updateField}
+                disabled={otpSent}
                 required
               />
             </div>
@@ -97,6 +208,7 @@ function Signup() {
                   key={option.value}
                   type="button"
                   className={`auth-role-btn ${form.role === option.value ? 'active' : ''}`}
+                  disabled={otpSent}
                   onClick={() => setForm((prev) => ({ ...prev, role: option.value }))}
                 >
                   {option.label}
@@ -116,30 +228,93 @@ function Signup() {
                 value={form.email}
                 onChange={updateField}
                 type="email"
+                disabled={otpSent}
                 required
               />
             </div>
           </div>
 
-          <div className="auth-field-group">
-            <label htmlFor="password" className="auth-field-label">Password</label>
-            <div className="auth-input-wrap">
-              <span className="auth-input-icon" aria-hidden="true">🔒</span>
-              <input
-                id="password"
-                name="password"
-                placeholder="Minimum 6 characters"
-                value={form.password}
-                onChange={updateField}
-                type="password"
-                required
-              />
-            </div>
-          </div>
+          {!otpSent && (
+            <button type="button" className="auth-signin-btn" disabled={loading} onClick={handleSendOtp}>
+              {loading ? 'Sending OTP...' : 'Send OTP'}
+            </button>
+          )}
 
-          <button type="submit" className="auth-signin-btn" disabled={loading}>
-            {loading ? 'Creating...' : 'Sign Up'}
-          </button>
+          {otpSent && !otpVerified && (
+            <>
+              <div className="auth-field-group">
+                <label htmlFor="otp" className="auth-field-label">Enter OTP</label>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon" aria-hidden="true">🔢</span>
+                  <input
+                    id="otp"
+                    name="otp"
+                    placeholder="6-digit code"
+                    value={otp}
+                    onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    type="text"
+                    required
+                  />
+                </div>
+                <small className="auth-inline-action" style={{ marginTop: '8px', display: 'block' }}>
+                  Expires in {formatSeconds(secondsLeft)}
+                </small>
+              </div>
+
+              <button type="button" className="auth-signin-btn" disabled={loading || secondsLeft <= 0} onClick={handleVerifyOtp}>
+                {loading ? 'Verifying...' : 'Verify OTP'}
+              </button>
+
+              <button
+                type="button"
+                className="auth-text-link"
+                onClick={handleSendOtp}
+                disabled={loading || resendSeconds > 0}
+              >
+                {resendSeconds > 0 ? `Resend OTP in ${resendSeconds}s` : 'Resend OTP'}
+              </button>
+            </>
+          )}
+
+          {otpVerified && (
+            <>
+              <div className="auth-field-group">
+                <label htmlFor="password" className="auth-field-label">Password</label>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon" aria-hidden="true">🔒</span>
+                  <input
+                    id="password"
+                    name="password"
+                    placeholder="Minimum 6 characters"
+                    value={form.password}
+                    onChange={updateField}
+                    type="password"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="auth-field-group">
+                <label htmlFor="confirmPassword" className="auth-field-label">Confirm Password</label>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon" aria-hidden="true">🔒</span>
+                  <input
+                    id="confirmPassword"
+                    name="confirmPassword"
+                    placeholder="Re-enter password"
+                    value={form.confirmPassword}
+                    onChange={updateField}
+                    type="password"
+                    required
+                  />
+                </div>
+              </div>
+
+              <button type="submit" className="auth-signin-btn" disabled={loading}>
+                {loading ? 'Creating...' : 'Sign Up'}
+              </button>
+            </>
+          )}
         </form>
 
         {error && <p className="error-text">{error}</p>}

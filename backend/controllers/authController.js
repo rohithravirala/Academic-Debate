@@ -2,8 +2,9 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const OTPSession = require('../models/OTPSession');
 const { normalizeWhitespace, splitFullName, composeFullName } = require('../utils/nameUtils');
-const { sendPasswordResetEmail } = require('../utils/mailer');
+const { sendPasswordResetEmail, sendOTPEmail } = require('../utils/mailer');
 
 const signToken = (user) =>
   jwt.sign({ id: user._id, role: user.role, email: user.email }, process.env.JWT_SECRET, {
@@ -29,15 +30,158 @@ const normalizeRole = (role) => {
   return 'student';
 };
 
+const OTP_EXPIRY_MS = 5 * 60 * 1000;
+const OTP_COOLDOWN_MS = 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
+
+const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const signOTPToken = ({ email, purpose }) =>
+  jwt.sign({ email, purpose, otpVerified: true }, process.env.JWT_SECRET, { expiresIn: '10m' });
+
+const validatePurpose = (purpose) => purpose === 'signup' || purpose === 'forgot_password';
+
+const sendOtpCode = async (req, res) => {
+  try {
+    const normalizedEmail = normalizeWhitespace(req.body?.email).toLowerCase();
+    const purpose = normalizeWhitespace(req.body?.purpose);
+
+    if (!normalizedEmail || !validatePurpose(purpose)) {
+      return res.status(400).json({ message: 'Valid email and purpose are required' });
+    }
+
+    if (purpose === 'signup') {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (existingUser) {
+        return res.status(409).json({ message: 'Email already registered' });
+      }
+    }
+
+    if (purpose === 'forgot_password') {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (!existingUser) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+    }
+
+    const existingSession = await OTPSession.findOne({ email: normalizedEmail, purpose });
+    if (existingSession) {
+      const cooldownRemaining = OTP_COOLDOWN_MS - (Date.now() - new Date(existingSession.lastSentAt).getTime());
+      if (cooldownRemaining > 0) {
+        return res.status(429).json({
+          message: `Please wait ${Math.ceil(cooldownRemaining / 1000)} seconds before resending OTP`,
+          retryAfter: Math.ceil(cooldownRemaining / 1000)
+        });
+      }
+    }
+
+    const otp = generateOTP();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+
+    await OTPSession.findOneAndUpdate(
+      { email: normalizedEmail, purpose },
+      {
+        $set: {
+          otpHash,
+          expiresAt,
+          lastSentAt: new Date(),
+          attempts: 0,
+          verifiedAt: null
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    const deliveryResult = await sendOTPEmail({ to: normalizedEmail, otp, purpose });
+
+    if (!deliveryResult?.delivered) {
+      return res.status(500).json({
+        message:
+          'OTP email was not delivered. Please check SMTP configuration (host/service, port, username, password, and sender).'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'OTP sent successfully',
+      expiresIn: 300
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to send OTP', error: error.message });
+  }
+};
+
+const verifyOtpCode = async (req, res) => {
+  try {
+    const normalizedEmail = normalizeWhitespace(req.body?.email).toLowerCase();
+    const purpose = normalizeWhitespace(req.body?.purpose);
+    const otp = normalizeWhitespace(req.body?.otp);
+
+    if (!normalizedEmail || !validatePurpose(purpose) || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ message: 'Valid email, purpose and 6-digit OTP are required' });
+    }
+
+    const session = await OTPSession.findOne({ email: normalizedEmail, purpose });
+    if (!session) {
+      return res.status(400).json({ message: 'OTP not found. Please request a new one.' });
+    }
+
+    if (new Date(session.expiresAt).getTime() < Date.now()) {
+      await OTPSession.deleteOne({ _id: session._id });
+      return res.status(400).json({ message: 'OTP expired. Please resend OTP.' });
+    }
+
+    if (session.attempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({ message: 'Too many invalid attempts. Please resend OTP.' });
+    }
+
+    const matches = await bcrypt.compare(otp, session.otpHash);
+    if (!matches) {
+      session.attempts += 1;
+      await session.save();
+      return res.status(400).json({
+        message: 'Invalid OTP',
+        attemptsLeft: Math.max(0, MAX_OTP_ATTEMPTS - session.attempts)
+      });
+    }
+
+    session.verifiedAt = new Date();
+    session.attempts = 0;
+    await session.save();
+
+    return res.status(200).json({
+      message: 'OTP verified successfully',
+      otpToken: signOTPToken({ email: normalizedEmail, purpose })
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to verify OTP', error: error.message });
+  }
+};
+
 const register = async (req, res) => {
   try {
-    const { name, firstName, middleName, lastName, email, password, role, profileImage, avatarUrl } = req.body;
+    const { name, firstName, middleName, lastName, email, password, role, profileImage, avatarUrl, otpToken } = req.body;
 
     if ((!name && !firstName) || !email || !password) {
       return res.status(400).json({ message: 'Name (or first name), email and password are required' });
     }
 
     const normalizedEmail = normalizeWhitespace(email).toLowerCase();
+
+    if (!otpToken) {
+      return res.status(400).json({ message: 'OTP verification is required before signup' });
+    }
+
+    let otpPayload;
+    try {
+      otpPayload = jwt.verify(otpToken, process.env.JWT_SECRET);
+    } catch (_error) {
+      return res.status(401).json({ message: 'Invalid or expired OTP verification token' });
+    }
+
+    if (!otpPayload?.otpVerified || otpPayload?.purpose !== 'signup' || otpPayload?.email !== normalizedEmail) {
+      return res.status(401).json({ message: 'OTP verification is invalid for this email' });
+    }
     const normalizedInputName = normalizeWhitespace(name);
     const hasSeparateNameFields = [firstName, middleName, lastName]
       .some((value) => normalizeWhitespace(value).length > 0);
@@ -86,6 +230,8 @@ const register = async (req, res) => {
     });
 
     const token = signToken(user);
+
+    await OTPSession.deleteOne({ email: normalizedEmail, purpose: 'signup' });
 
     return res.status(201).json({
       message: 'User registered successfully',
@@ -220,4 +366,66 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { register, login, forgotPassword, resetPassword };
+const resetPasswordWithOtp = async (req, res) => {
+  try {
+    const normalizedEmail = normalizeWhitespace(req.body?.email).toLowerCase();
+    const { password, confirmPassword, otpToken } = req.body;
+
+    if (!normalizedEmail || !otpToken) {
+      return res.status(400).json({ message: 'Email and OTP verification token are required' });
+    }
+
+    if (!password || !confirmPassword) {
+      return res.status(400).json({ message: 'Password and confirm password are required' });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: 'Passwords do not match' });
+    }
+
+    let otpPayload;
+    try {
+      otpPayload = jwt.verify(otpToken, process.env.JWT_SECRET);
+    } catch (_error) {
+      return res.status(401).json({ message: 'Invalid or expired OTP verification token' });
+    }
+
+    if (
+      !otpPayload?.otpVerified ||
+      otpPayload?.purpose !== 'forgot_password' ||
+      otpPayload?.email !== normalizedEmail
+    ) {
+      return res.status(401).json({ message: 'OTP verification is invalid for this email' });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    user.passwordResetToken = '';
+    user.passwordResetExpiresAt = null;
+    await user.save();
+
+    await OTPSession.deleteOne({ email: normalizedEmail, purpose: 'forgot_password' });
+
+    return res.status(200).json({ message: 'Password reset successful' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to reset password', error: error.message });
+  }
+};
+
+module.exports = {
+  register,
+  login,
+  forgotPassword,
+  resetPassword,
+  sendOtpCode,
+  verifyOtpCode,
+  resetPasswordWithOtp
+};
