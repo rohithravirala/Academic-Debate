@@ -75,7 +75,6 @@ const sendOtpCode = async (req, res) => {
       }
     }
 
-    console.log(`[AUTH] Generating OTP for ${normalizedEmail} (Purpose: ${purpose})`);
     const otp = generateOTP();
     const otpHash = await bcrypt.hash(otp, 10);
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
@@ -93,26 +92,21 @@ const sendOtpCode = async (req, res) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    console.log(`[AUTH] OTPSession updated in DB for ${normalizedEmail}`);
 
-    console.log(`[AUTH] Attempting to send OTP email via mailer...`);
     const deliveryResult = await sendOTPEmail({ to: normalizedEmail, otp, purpose });
 
     if (!deliveryResult?.delivered) {
-      console.warn(`[AUTH] OTP delivery failed:`, deliveryResult);
       return res.status(500).json({
         message:
           'OTP email was not delivered. Please check SMTP configuration (host/service, port, username, password, and sender).'
       });
     }
 
-    console.log(`[AUTH] OTP sent successfully to ${normalizedEmail}`);
     return res.status(200).json({
       message: 'OTP sent successfully',
       expiresIn: 300
     });
   } catch (error) {
-    console.error(`[AUTH] FATAL ERROR in sendOtpCode:`, error);
     return res.status(500).json({ message: 'Failed to send OTP', error: error.message });
   }
 };

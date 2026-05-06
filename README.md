@@ -1,110 +1,181 @@
 # Academic Debate Platform
 
-A premium, full-stack platform designed to facilitate structured, real-time academic debates between students and professionals. The platform fosters civil discourse through moderated rooms, real-time argument flows, and a merit-based gamification system.
+Full-stack academic debate platform with a modern dashboard and real-time argument flow.
 
----
+- **Frontend:** React + Vite + Axios + React Router
+- **Backend:** Node.js + Express + JWT + Socket.IO
+- **Database:** MongoDB Atlas via Mongoose
 
-## 🎯 Purpose & Vision
+## Project Structure
 
-In an era of rapid information exchange, the **Academic Debate Platform** aims to provide a controlled environment for intellectual growth. By separating emotional response from logical argumentation, the platform encourages users to:
-- Practice critical thinking through Pro/Con positioning.
-- Engage with verified professionals and peer students.
-- Participate in a transparent voting system to determine the most persuasive arguments.
-- Earn recognition through a points-based leaderboard.
+- `frontend/` → UI, routing, API client, socket client
+- `backend/` → REST APIs, auth, Mongoose models, socket server
 
----
+## Backend Setup
 
-## 🚀 How It Works
+Create/update `backend/.env`:
 
-The platform operates on a real-time event-driven architecture, ensuring that debates are as dynamic as in-person academic tournaments.
-
-### 1. Secure Authentication
-To ensure the integrity of the community, all users must verify their identity via an OTP (One-Time Password) system. This prevents bot spam and ensures every participant is linked to a verified email address.
-
-### 2. Debate Lifecycle
-Debates are managed through three distinct phases:
-- **Upcoming**: Moderators schedule topics and participants join their respective sides.
-- **Live**: The room opens for real-time arguments, rebuttals, and audience interaction.
-- **Completed**: The debate concludes, votes are tallied, and results are archived for the community to review.
-
-### 3. Argument Structure
-Unlike a standard chat room, the debate room is split. Only the assigned **Pro** and **Con** participants can post in the primary argument sections, while the audience engages via live chat and real-time voting.
-
----
-
-## 📊 System Workflows
-
-### Authentication Flow
-```mermaid
-graph TD
-    A[User Signup/Login] --> B{Email Entered?}
-    B -- Yes --> C[Generate Secure OTP]
-    C --> D[Send OTP via Email]
-    D --> E[User Enters OTP]
-    E --> F{OTP Valid & Not Expired?}
-    F -- Yes --> G[Issue Verified Token]
-    G --> H[Access Platform]
-    F -- No --> E
+```bash
+PORT=5001
+MONGO_URI=mongodb+srv://<username>:<password>@<cluster>/academic_debate?retryWrites=true&w=majority
+JWT_SECRET=your_strong_secret
+CLIENT_URLS=http://localhost:5173,https://your-frontend.vercel.app
+CLIENT_URL=http://localhost:5173
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_email@example.com
+SMTP_PASS=your_email_password_or_app_password
+SMTP_FROM=Academic Debate <no-reply@academicdebate.local>
 ```
 
-### Debate Participation Flow
-```mermaid
-graph LR
-    A[Moderator Creates Debate] --> B[Upcoming Phase]
-    B --> C[Participants Join Pro/Con]
-    C --> D[Live Phase Starts]
-    D --> E[Pro/Con Present Arguments]
-    E --> F[Audience Votes & Chats]
-    F --> G[End Time Reached]
-    G --> H[Debate Completed]
-    H --> I[Points Awarded]
+Run backend:
+
+```bash
+cd backend
+npm install
+npm run dev
 ```
 
----
+## Frontend Setup
 
-## 👥 User Roles & Permissions
+Create/update `frontend/.env.development`:
 
-| Role | Capabilities |
-| :--- | :--- |
-| **Moderator** | Create/Edit/Delete debates, manage room status, and oversee quality. |
-| **Professional** | Join debates as Pro/Con, present high-level arguments, and mentor students. |
-| **Student** | Join debates as Pro/Con, participate in audience voting, and climb the leaderboard. |
-| **Other** | Spectate debates, participate in audience chat, and vote for the winner. |
+```bash
+VITE_API_URL=http://localhost:5001
+```
 
----
+Run frontend:
 
-## 🛠 Tech Stack
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- **Frontend**: React.js with Vite, styled with a premium minimalist aesthetic.
-- **Backend**: Node.js & Express using a modular controller-service architecture.
-- **Real-Time**: Socket.io for instant argument delivery and live voting updates.
-- **Security**: JWT for session management and Bcrypt for data hashing.
-- **Database**: MongoDB Atlas for flexible, document-based storage.
+## Core Schemas
 
----
+### User
+- `name` (required)
+- `email` (required, unique)
+- `password` (hashed)
+- `role` (`student | moderator`)
+- `points` (default `0`)
+- `createdAt`
 
-## ⚙️ Getting Started
+### Debate
+- `title` (required)
+- `topic`
+- `description`
+- `category` (`Technology | Science | Politics | Education | Environment`)
+- `status` (`live | upcoming`)
+- `scheduledTime`
+- `watchersCount`
+- `proVotes`, `conVotes`
+- `createdBy` (User ref)
+- `participants.proUser` (User ref)
+- `participants.conUser` (User ref)
+- `participantLabels.proLabel`, `participantLabels.conLabel`
 
-### Prerequisites
-- Node.js (v18+)
-- MongoDB Atlas Account
-- SMTP Service (e.g., Gmail App Password)
+### Argument
+- `debateId` (Debate ref)
+- `userId` (User ref)
+- `side` (`pro | con`)
+- `type` (`argument | rebuttal | question`)
+- `content`
+- `createdAt`
 
-### Installation
-1. **Clone the Repository**
-2. **Backend Setup**:
-   ```bash
-   cd backend
-   npm install
-   # Create a .env file based on .env.example
-   npm run dev
-   ```
-3. **Frontend Setup**:
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
+## API Endpoints
 
----
-© 2024 Academic Debate Platform. Fostering the leaders of tomorrow through the discourse of today.
+### Auth
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password/:token`
+
+### Debates (JWT Protected)
+- `GET /api/debates`
+- `GET /api/debates/home-feed` (recent + trending)
+- `GET /api/debates/latest`
+- `POST /api/debates`
+- `GET /api/debates/:id`
+- `POST /api/debates/:id/join` (`{ role: "pro" | "con" }` or `{ side: "pro" | "con" }`)
+- `POST /api/debates/:id/watch`
+- `POST /api/debates/:id/vote`
+
+## Real-Time Debate Rules
+
+- Debate start/end times are stored and returned as UTC ISO timestamps.
+- Frontend must send create times as UTC (e.g. `new Date(localValue).toISOString()`).
+- Each debate has one `pro` and one `con` slot; only one user can occupy each slot.
+- A user can join only one side in the same debate.
+- Only the joined `pro` user can post in Pro arguments; only the joined `con` user can post in Con arguments.
+- Any authenticated user can post in live audience chat.
+
+### Messages (JWT Protected)
+- `GET /api/messages/:debateId`
+- `POST /api/messages`
+
+### Users (JWT Protected)
+- `GET /api/users/leaderboard` (top 5 by points)
+- `GET /api/users/profile`
+- `PUT /api/users/profile`
+
+## Socket Events
+
+### Client → Server
+- `joinDebate` → `{ debateId }`
+- `sendMessage` / `sendArgument` → `{ debateId, side, type, content }`
+
+### Server → Client
+- `newArgument`
+- `errorMessage`
+
+## Validation Checklist
+
+The implementation has been smoke-tested for:
+
+- Register user
+- Login user
+- Create debate
+- Join debate side (`pro`/`con`)
+- Vote in debate poll (`pro`/`con`)
+- Register watcher count
+- Fetch debates
+- Fetch home dashboard feed
+- Fetch leaderboard
+- Frontend production build
+
+## Frontend Routes
+
+- `/login` → Login
+- `/signup` → Sign up with role selector
+- `/forgot-password` → Request reset link
+- `/reset-password/:token` → Set new password
+- `/home` → Dashboard with recent/trending sections
+- `/debate-rooms` → Full debate listing with filters/search/category
+- `/debates/:debateId` → Real-time room (Pro/Con chat, participants, timer, voting)
+- `/leaderboard` → Top debaters
+- `/profile` → Profile view/edit
+
+## Password Reset Flow
+
+1. User submits email on `/forgot-password`.
+2. Backend creates secure reset token + 1-hour expiry in `users` collection.
+3. Backend sends reset URL to user email (`/reset-password/:token`).
+4. User submits new password and confirmation.
+5. Backend verifies token, hashes password, and clears reset token fields.
+
+If SMTP is not configured, backend logs the reset link to terminal for local development.
+
+## Deployment Ready
+
+### Frontend (Vercel)
+- Env var: `VITE_API_URL=https://your-backend.onrender.com`
+- Build: `npm run build`
+- Output: `frontend/dist`
+
+### Backend (Render)
+- Start command: `npm start`
+- Uses dynamic port: `process.env.PORT || 5001`
+- Ensure `MONGO_URI`, `JWT_SECRET`, `CLIENT_URLS` are set

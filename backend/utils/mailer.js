@@ -11,21 +11,13 @@ const isTruthy = (value) => String(value).toLowerCase() === 'true';
 let cachedTransporter = null;
 let transporterVerified = false;
 
-const stripWhitespace = (value) => String(value || '').replace(/\s+/g, '').trim();
-
 const getSmtpConfig = () => {
-  const service = stripWhitespace(process.env.SMTP_SERVICE);
-  const host = stripWhitespace(process.env.SMTP_HOST);
+  const service = normalizeWhitespace(process.env.SMTP_SERVICE);
+  const host = normalizeWhitespace(process.env.SMTP_HOST);
   const port = toInt(process.env.SMTP_PORT, 587);
   const secure = isTruthy(process.env.SMTP_SECURE);
-  const user = stripWhitespace(process.env.SMTP_USER);
-  const pass = stripWhitespace(process.env.SMTP_PASS);
-
-  // Strip potential literal quotes if they were added in the hosting dashboard
-  let from = normalizeWhitespace(process.env.SMTP_FROM || '');
-  if (from.startsWith('"') && from.endsWith('"')) {
-    from = from.slice(1, -1);
-  }
+  const user = normalizeWhitespace(process.env.SMTP_USER);
+  const pass = normalizeWhitespace(process.env.SMTP_PASS);
 
   return {
     service,
@@ -34,7 +26,7 @@ const getSmtpConfig = () => {
     secure,
     user,
     pass,
-    from: from || 'no-reply@academicdebate.local',
+    from: normalizeWhitespace(process.env.SMTP_FROM) || 'no-reply@academicdebate.local',
     fallbackAllowed: isTruthy(process.env.SMTP_ALLOW_FALLBACK)
   };
 };
@@ -45,8 +37,16 @@ const getTransporter = async () => {
 
   if (!hasProvider || !smtp.user || !smtp.pass) {
     if (smtp.fallbackAllowed) {
+      console.log('[MAILER] SMTP is not configured. Falling back to console logging.');
       return { transporter: null, from: smtp.from, fallback: true };
     }
+
+    console.error('[MAILER] SMTP Configuration Missing:', {
+      host: smtp.host || 'NOT_SET',
+      service: smtp.service || 'NOT_SET',
+      user: smtp.user ? 'REDACTED' : 'NOT_SET',
+      pass: smtp.pass ? 'REDACTED' : 'NOT_SET'
+    });
 
     throw new Error(
       'SMTP is not fully configured. Set SMTP_SERVICE (or SMTP_HOST), SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM.'
@@ -54,42 +54,35 @@ const getTransporter = async () => {
   }
 
   if (!cachedTransporter) {
-    const isGmail = smtp.host === 'smtp.gmail.com';
-    const transportOptions = (smtp.service || isGmail)
-      ? {
-          service: smtp.service || 'gmail',
-          auth: { user: smtp.user, pass: smtp.pass }
-        }
-      : {
-          host: smtp.host,
-          port: smtp.port,
-          secure: smtp.secure,
-          auth: { user: smtp.user, pass: smtp.pass },
-          tls: {
-            rejectUnauthorized: false
+    console.log(`[MAILER] Creating transporter for ${smtp.service || smtp.host}...`);
+    cachedTransporter = nodemailer.createTransport(
+      smtp.service
+        ? {
+            service: smtp.service,
+            auth: { user: smtp.user, pass: smtp.pass }
           }
-        };
-
-    cachedTransporter = nodemailer.createTransport(transportOptions);
+        : {
+            host: smtp.host,
+            port: smtp.port,
+            secure: smtp.secure,
+            auth: { user: smtp.user, pass: smtp.pass }
+          }
+    );
   }
 
   if (!transporterVerified) {
     try {
+      console.log('[MAILER] Verifying SMTP connection...');
       await cachedTransporter.verify();
+      console.log('[MAILER] SMTP connection verified successfully.');
       transporterVerified = true;
-    } catch (err) {
-      console.error('[MAILER] SMTP verification failed:', err.message);
+    } catch (error) {
+      console.error('[MAILER] SMTP Verification Failed:', error.message);
+      throw error;
     }
   }
 
-  return { 
-    transporter: cachedTransporter, 
-    from: smtp.from, 
-    fallback: false,
-    host: smtp.host,
-    service: smtp.service,
-    user: smtp.user
-  };
+  return { transporter: cachedTransporter, from: smtp.from, fallback: false };
 };
 
 const sendPasswordResetEmail = async ({ to, resetLink, name }) => {
@@ -124,52 +117,37 @@ const sendPasswordResetEmail = async ({ to, resetLink, name }) => {
 };
 
 const sendOTPEmail = async ({ to, otp, purpose }) => {
-  console.log(`[MAILER] Preparing OTP email for ${to}...`);
-  const { transporter, from, fallback, user, host, service } = await getTransporter();
-  
-  const subject =
-    purpose === 'forgot_password'
-      ? 'Your Academic Debate password reset OTP'
-      : 'Your Academic Debate signup OTP';
-  const text = `Your OTP is ${otp}. It expires in 5 minutes.`;
-  const html = `
-    <div style="font-family: Inter, Arial, sans-serif; color: #0f172a; line-height: 1.5;">
-      <h2 style="margin-bottom: 8px;">One-Time Password (OTP)</h2>
-      <p>Your verification code is:</p>
-      <p style="font-size: 28px; font-weight: 700; letter-spacing: 6px; margin: 12px 0 16px;">${otp}</p>
-      <p>This code expires in <strong>5 minutes</strong>.</p>
-      <p style="margin-top: 12px; color: #64748b;">If you did not request this, you can safely ignore this email.</p>
-    </div>
-  `;
-
-  if (!transporter && fallback) {
-    console.log(`[MAILER] SMTP fallback mode enabled. OTP email not delivered.`);
-    console.log(`[MAILER] SIMULATED EMAIL CONTENT for ${to}:`);
-    console.log(`         Subject: ${subject}`);
-    console.log(`         OTP: ${otp}`);
-    return { delivered: true, fallback: true };
-  }
-
-  if (!transporter) {
-    console.error(`[MAILER] No transporter available for ${to}`);
-    return { delivered: false, fallback: false };
-  }
-
   try {
-    console.log(`[MAILER] Attempting to sendMail to ${to} using ${service || host} (User: ${user})...`);
-    
-    // Add a timeout to the send attempt to avoid 2-minute hangs
-    const sendPromise = transporter.sendMail({ from, to, subject, text, html });
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('SMTP send timeout after 30s')), 30000)
-    );
+    const { transporter, from, fallback } = await getTransporter();
+    const subject =
+      purpose === 'forgot_password'
+        ? 'Your Academic Debate password reset OTP'
+        : 'Your Academic Debate signup OTP';
+    const text = `Your OTP is ${otp}. It expires in 5 minutes.`;
+    const html = `
+      <div style="font-family: Inter, Arial, sans-serif; color: #0f172a; line-height: 1.5;">
+        <h2 style="margin-bottom: 8px;">One-Time Password (OTP)</h2>
+        <p>Your verification code is:</p>
+        <p style="font-size: 28px; font-weight: 700; letter-spacing: 6px; margin: 12px 0 16px;">${otp}</p>
+        <p>This code expires in <strong>5 minutes</strong>.</p>
+        <p style="margin-top: 12px; color: #64748b;">If you did not request this, you can safely ignore this email.</p>
+      </div>
+    `;
 
-    await Promise.race([sendPromise, timeoutPromise]);
-    
-    console.log(`[MAILER] sendMail successfully completed for ${to}`);
+    if (!transporter && fallback) {
+      console.log(`[MAILER] SMTP fallback mode enabled. OTP email not delivered.`);
+      console.log(`[MAILER] SIMULATED EMAIL CONTENT for ${to}:`);
+      console.log(`         Subject: ${subject}`);
+      console.log(`         OTP: ${otp}`);
+      return { delivered: true, fallback: true };
+    }
+
+    console.log(`[MAILER] Sending OTP email to ${to}...`);
+    await transporter.sendMail({ from, to, subject, text, html });
+    console.log(`[MAILER] OTP email sent successfully to ${to}.`);
     return { delivered: true, fallback: false };
   } catch (error) {
-    console.error(`[MAILER] Error during sendMail to ${to}:`, error.message);
+    console.error(`[MAILER] Failed to send OTP email to ${to}:`, error.message);
     return { delivered: false, fallback: false, error: error.message };
   }
 };
