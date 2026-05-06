@@ -54,27 +54,42 @@ const getTransporter = async () => {
   }
 
   if (!cachedTransporter) {
-    cachedTransporter = nodemailer.createTransport(
-      smtp.service
-        ? {
-            service: smtp.service,
-            auth: { user: smtp.user, pass: smtp.pass }
+    const isGmail = smtp.host === 'smtp.gmail.com';
+    const transportOptions = (smtp.service || isGmail)
+      ? {
+          service: smtp.service || 'gmail',
+          auth: { user: smtp.user, pass: smtp.pass }
+        }
+      : {
+          host: smtp.host,
+          port: smtp.port,
+          secure: smtp.secure,
+          auth: { user: smtp.user, pass: smtp.pass },
+          tls: {
+            rejectUnauthorized: false
           }
-        : {
-            host: smtp.host,
-            port: smtp.port,
-            secure: smtp.secure,
-            auth: { user: smtp.user, pass: smtp.pass }
-          }
-    );
+        };
+
+    cachedTransporter = nodemailer.createTransport(transportOptions);
   }
 
   if (!transporterVerified) {
-    await cachedTransporter.verify();
-    transporterVerified = true;
+    try {
+      await cachedTransporter.verify();
+      transporterVerified = true;
+    } catch (err) {
+      console.error('[MAILER] SMTP verification failed:', err.message);
+    }
   }
 
-  return { transporter: cachedTransporter, from: smtp.from, fallback: false };
+  return { 
+    transporter: cachedTransporter, 
+    from: smtp.from, 
+    fallback: false,
+    host: smtp.host,
+    service: smtp.service,
+    user: smtp.user
+  };
 };
 
 const sendPasswordResetEmail = async ({ to, resetLink, name }) => {
@@ -109,7 +124,9 @@ const sendPasswordResetEmail = async ({ to, resetLink, name }) => {
 };
 
 const sendOTPEmail = async ({ to, otp, purpose }) => {
-  const { transporter, from, fallback } = await getTransporter();
+  console.log(`[MAILER] Preparing OTP email for ${to}...`);
+  const { transporter, from, fallback, user, host, service } = await getTransporter();
+  
   const subject =
     purpose === 'forgot_password'
       ? 'Your Academic Debate password reset OTP'
@@ -133,8 +150,28 @@ const sendOTPEmail = async ({ to, otp, purpose }) => {
     return { delivered: true, fallback: true };
   }
 
-  await transporter.sendMail({ from, to, subject, text, html });
-  return { delivered: true, fallback: false };
+  if (!transporter) {
+    console.error(`[MAILER] No transporter available for ${to}`);
+    return { delivered: false, fallback: false };
+  }
+
+  try {
+    console.log(`[MAILER] Attempting to sendMail to ${to} using ${service || host} (User: ${user})...`);
+    
+    // Add a timeout to the send attempt to avoid 2-minute hangs
+    const sendPromise = transporter.sendMail({ from, to, subject, text, html });
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('SMTP send timeout after 30s')), 30000)
+    );
+
+    await Promise.race([sendPromise, timeoutPromise]);
+    
+    console.log(`[MAILER] sendMail successfully completed for ${to}`);
+    return { delivered: true, fallback: false };
+  } catch (error) {
+    console.error(`[MAILER] Error during sendMail to ${to}:`, error.message);
+    return { delivered: false, fallback: false, error: error.message };
+  }
 };
 
 module.exports = { sendPasswordResetEmail, sendOTPEmail };
