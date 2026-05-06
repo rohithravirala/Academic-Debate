@@ -46,13 +46,17 @@ const sendOtpCode = async (req, res) => {
     const normalizedEmail = normalizeWhitespace(req.body?.email).toLowerCase();
     const purpose = normalizeWhitespace(req.body?.purpose);
 
+    console.log(`[AUTH] OTP Request: email=${normalizedEmail}, purpose=${purpose}`);
+
     if (!normalizedEmail || !validatePurpose(purpose)) {
+      console.warn('[AUTH] OTP Request failed: Missing email or invalid purpose');
       return res.status(400).json({ message: 'Valid email and purpose are required' });
     }
 
     if (purpose === 'signup') {
       const existingUser = await User.findOne({ email: normalizedEmail });
       if (existingUser) {
+        console.warn(`[AUTH] Signup OTP failed: Email ${normalizedEmail} already exists`);
         return res.status(409).json({ message: 'Email already registered' });
       }
     }
@@ -60,6 +64,7 @@ const sendOtpCode = async (req, res) => {
     if (purpose === 'forgot_password') {
       const existingUser = await User.findOne({ email: normalizedEmail });
       if (!existingUser) {
+        console.warn(`[AUTH] Forgot Password OTP failed: User ${normalizedEmail} not found`);
         return res.status(404).json({ message: 'User not found' });
       }
     }
@@ -68,6 +73,7 @@ const sendOtpCode = async (req, res) => {
     if (existingSession) {
       const cooldownRemaining = OTP_COOLDOWN_MS - (Date.now() - new Date(existingSession.lastSentAt).getTime());
       if (cooldownRemaining > 0) {
+        console.warn(`[AUTH] OTP Throttled: ${normalizedEmail} must wait ${Math.ceil(cooldownRemaining / 1000)}s`);
         return res.status(429).json({
           message: `Please wait ${Math.ceil(cooldownRemaining / 1000)} seconds before resending OTP`,
           retryAfter: Math.ceil(cooldownRemaining / 1000)
@@ -78,6 +84,8 @@ const sendOtpCode = async (req, res) => {
     const otp = generateOTP();
     const otpHash = await bcrypt.hash(otp, 10);
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+
+    console.log(`[AUTH] Generated OTP for ${normalizedEmail}. Storing hash in DB...`);
 
     await OTPSession.findOneAndUpdate(
       { email: normalizedEmail, purpose },
@@ -93,20 +101,24 @@ const sendOtpCode = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
+    console.log(`[AUTH] Calling mailer to send OTP to ${normalizedEmail}...`);
     const deliveryResult = await sendOTPEmail({ to: normalizedEmail, otp, purpose });
 
     if (!deliveryResult?.delivered) {
+      console.error('[AUTH] OTP delivery failed:', deliveryResult);
       return res.status(500).json({
         message:
           'OTP email was not delivered. Please check SMTP configuration (host/service, port, username, password, and sender).'
       });
     }
 
+    console.log(`[AUTH] OTP successfully sent to ${normalizedEmail}`);
     return res.status(200).json({
       message: 'OTP sent successfully',
       expiresIn: 300
     });
   } catch (error) {
+    console.error('[AUTH] Internal error in sendOtpCode:', error.message);
     return res.status(500).json({ message: 'Failed to send OTP', error: error.message });
   }
 };
@@ -117,21 +129,27 @@ const verifyOtpCode = async (req, res) => {
     const purpose = normalizeWhitespace(req.body?.purpose);
     const otp = normalizeWhitespace(req.body?.otp);
 
+    console.log(`[AUTH] OTP Verification Attempt: email=${normalizedEmail}, purpose=${purpose}`);
+
     if (!normalizedEmail || !validatePurpose(purpose) || !/^\d{6}$/.test(otp)) {
+      console.warn('[AUTH] OTP Verification failed: Invalid input format');
       return res.status(400).json({ message: 'Valid email, purpose and 6-digit OTP are required' });
     }
 
     const session = await OTPSession.findOne({ email: normalizedEmail, purpose });
     if (!session) {
+      console.warn(`[AUTH] OTP Verification failed: No active session for ${normalizedEmail}`);
       return res.status(400).json({ message: 'OTP not found. Please request a new one.' });
     }
 
     if (new Date(session.expiresAt).getTime() < Date.now()) {
+      console.warn(`[AUTH] OTP Verification failed: OTP expired for ${normalizedEmail}`);
       await OTPSession.deleteOne({ _id: session._id });
       return res.status(400).json({ message: 'OTP expired. Please resend OTP.' });
     }
 
     if (session.attempts >= MAX_OTP_ATTEMPTS) {
+      console.warn(`[AUTH] OTP Verification failed: Max attempts reached for ${normalizedEmail}`);
       return res.status(429).json({ message: 'Too many invalid attempts. Please resend OTP.' });
     }
 
@@ -139,12 +157,14 @@ const verifyOtpCode = async (req, res) => {
     if (!matches) {
       session.attempts += 1;
       await session.save();
+      console.warn(`[AUTH] OTP Verification failed: Incorrect code for ${normalizedEmail}. Attempt ${session.attempts}/${MAX_OTP_ATTEMPTS}`);
       return res.status(400).json({
         message: 'Invalid OTP',
         attemptsLeft: Math.max(0, MAX_OTP_ATTEMPTS - session.attempts)
       });
     }
 
+    console.log(`[AUTH] OTP Verified successfully for ${normalizedEmail}`);
     session.verifiedAt = new Date();
     session.attempts = 0;
     await session.save();
@@ -154,6 +174,7 @@ const verifyOtpCode = async (req, res) => {
       otpToken: signOTPToken({ email: normalizedEmail, purpose })
     });
   } catch (error) {
+    console.error('[AUTH] Internal error in verifyOtpCode:', error.message);
     return res.status(500).json({ message: 'Failed to verify OTP', error: error.message });
   }
 };
