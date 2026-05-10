@@ -7,7 +7,15 @@ const userSchema = new mongoose.Schema(
     middleName: { type: String, trim: true, default: '' },
     lastName: { type: String, trim: true, default: '' },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true, minlength: 6 },
+    password: { 
+      type: String, 
+      required: function() {
+        return this.provider !== 'google';
+      },
+      minlength: 6 
+    },
+    provider: { type: String, enum: ['local', 'google'], default: 'local' },
+    googleId: { type: String, trim: true, default: '' },
     role: { type: String, enum: ['student', 'professional', 'moderator', 'other'], default: 'student' },
     country: { type: String, trim: true, default: '' },
     phoneNumber: { type: String, trim: true, default: '' },

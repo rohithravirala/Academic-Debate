@@ -1277,6 +1277,90 @@ button.success:hover {
   font-size: 0.9rem;
 }
 
+/* Google Button Styles */
+.google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  margin-bottom: 1.5rem;
+}
+
+.google-btn:hover {
+  background-color: #f9fafb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.google-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.google-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.auth-separator {
+  margin: 1.5rem 0;
+  text-align: center;
+  position: relative;
+}
+
+.auth-separator::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: #e2e8f0;
+  z-index: 0;
+}
+
+.auth-separator span {
+  background-color: white; /* update depending on theme */
+  padding: 0 10px;
+  color: #64748b;
+  font-size: 0.875rem;
+  position: relative;
+  z-index: 1;
+}
+
+.auth-modern-bottom {
+  margin: 0;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.auth-switch-link {
+  color: #4f46e5;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-switch-link:hover {
+  text-decoration: underline;
+}
+
+.auth-modern-card .error-text,
+.auth-modern-card .success-text {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 480px) {
   .auth-page {
     padding: 16px;

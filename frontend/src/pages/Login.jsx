@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 
 function Login() {
@@ -8,6 +8,30 @@ function Login() {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    // Handle redirect from Google OAuth
+    const token = searchParams.get('token');
+    const userStr = searchParams.get('user');
+    const authError = searchParams.get('error');
+
+    if (token && userStr) {
+      try {
+        const userObj = JSON.parse(decodeURIComponent(userStr));
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(userObj));
+        setSuccess('Google Login successful. Redirecting...');
+        setTimeout(() => {
+          navigate('/home');
+        }, 1000);
+      } catch (err) {
+        setError('Failed to process Google authentication.');
+      }
+    } else if (authError) {
+      setError('Google authentication failed.');
+    }
+  }, [searchParams, navigate]);
 
   const updateField = (event) => {
     const { name, value } = event.target;
@@ -50,8 +74,11 @@ function Login() {
           <p>Sign in to continue to debate dashboard</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="form-grid auth-modern-form">
-          <div className="auth-field-group">
+        {error && <div className="modern-alert error"><span className="icon">⚠️</span>{error}</div>}
+        {success && <div className="modern-alert success"><span className="icon">✅</span>{success}</div>}
+
+        <form onSubmit={handleSubmit} className="auth-modern-form">
+          <div className="modern-input-group">
             <label htmlFor="email" className="auth-field-label">Email</label>
             <div className="auth-input-wrap">
               <span className="auth-input-icon" aria-hidden="true">✉️</span>
@@ -67,7 +94,7 @@ function Login() {
             </div>
           </div>
 
-          <div className="auth-field-group">
+          <div className="modern-input-group">
             <label htmlFor="password" className="auth-field-label">Password</label>
             <div className="auth-input-wrap">
               <span className="auth-input-icon" aria-hidden="true">🔒</span>
@@ -87,17 +114,30 @@ function Login() {
             </div>
           </div>
 
-          <button type="submit" className="auth-signin-btn" disabled={loading}>
-            {loading ? 'Signing In...' : 'Sign In'}
+          <button type="submit" className="modern-btn modern-btn-primary" disabled={loading}>
+            {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 
-        {error && <p className="error-text">{error}</p>}
-        {success && <p className="success-text">{success}</p>}
+        <div className="auth-separator">
+          <span>OR</span>
+        </div>
 
-        <p className="auth-modern-bottom">
-          Don&apos;t have an account?{' '}
-          <Link to="/signup" className="auth-switch-link">Sign Up</Link>
+        <button 
+          type="button" 
+          className="google-btn" 
+          onClick={() => {
+            setLoading(true);
+            window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5001'}/api/auth/google`;
+          }}
+          disabled={loading}
+        >
+          <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo" className="google-icon" />
+          Continue with Google
+        </button>
+
+        <p className="modern-auth-footer">
+          Don't have an account? <Link to="/signup">Register here</Link>
         </p>
       </div>
     </div>

@@ -317,6 +317,21 @@ function Signup() {
           )}
         </form>
 
+        <div className="auth-separator">
+          <span>OR</span>
+        </div>
+
+        <button 
+          type="button" 
+          className="google-btn" 
+          onClick={() => {
+            window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5001/api/auth/google'}`;
+          }}
+        >
+          <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo" className="google-icon" />
+          Continue with Google
+        </button>
+
         {error && <p className="error-text">{error}</p>}
         {success && <p className="success-text">{success}</p>}
 

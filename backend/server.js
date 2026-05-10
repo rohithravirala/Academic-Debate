@@ -65,6 +65,11 @@ app.set('io', io);
 
 app.use(express.json({ limit: '2mb' }));
 
+// Initialize passport
+require('./config/passport');
+const passport = require('passport');
+app.use(passport.initialize());
+
 app.get('/', (req, res) => {
   res.send('API is running');
 });
