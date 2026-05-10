@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 
@@ -9,12 +9,44 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const hasHandledGoogleAuth = useRef(false);
 
   useEffect(() => {
     // Handle redirect from Google OAuth
+    const authCode = searchParams.get('code');
     const token = searchParams.get('token');
     const userStr = searchParams.get('user');
     const authError = searchParams.get('error');
+
+    const completeGoogleLogin = async (code) => {
+      if (hasHandledGoogleAuth.current) {
+        return;
+      }
+
+      hasHandledGoogleAuth.current = true;
+      setError('');
+      setLoading(true);
+
+      try {
+        const { data } = await api.post('/api/auth/google/exchange', { code });
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setSuccess('Google Login successful. Redirecting...');
+        navigate('/home', { replace: true });
+      } catch (err) {
+        setError(err.response?.data?.message || 'Failed to process Google authentication.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+        if (hasHandledGoogleAuth.current) {
+          return;
+        }
+    if (authCode) {
+      completeGoogleLogin(authCode);
+      return;
+    }
 
     if (token && userStr) {
       try {
@@ -22,9 +54,7 @@ function Login() {
         localStorage.setItem('token', token);
         localStorage.setItem('user', JSON.stringify(userObj));
         setSuccess('Google Login successful. Redirecting...');
-        setTimeout(() => {
-          navigate('/home');
-        }, 1000);
+        navigate('/home', { replace: true });
       } catch (err) {
         setError('Failed to process Google authentication.');
       }

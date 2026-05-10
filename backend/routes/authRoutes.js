@@ -10,8 +10,10 @@ const {
 } = require('../controllers/authController');
 const passport = require('passport');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const router = express.Router();
+const clientURL = process.env.CLIENT_URL || 'http://localhost:5173';
 
 router.post('/register', register);
 router.post('/login', login);
@@ -21,16 +23,70 @@ router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
 router.post('/reset-password-otp', resetPasswordWithOtp);
 
+const googleAuthCodes = new Map();
+const GOOGLE_AUTH_CODE_TTL_MS = 5 * 60 * 1000;
+
+const createGoogleAuthCode = (payload) => {
+	const code = crypto.randomBytes(24).toString('hex');
+	googleAuthCodes.set(code, {
+		...payload,
+		expiresAt: Date.now() + GOOGLE_AUTH_CODE_TTL_MS
+	});
+	return code;
+};
+
+const consumeGoogleAuthCode = (code) => {
+	const stored = googleAuthCodes.get(code);
+	if (!stored) {
+		return null;
+	}
+
+	googleAuthCodes.delete(code);
+
+	if (stored.expiresAt < Date.now()) {
+		return null;
+	}
+
+	return stored;
+};
+
+setInterval(() => {
+	const now = Date.now();
+	for (const [code, stored] of googleAuthCodes.entries()) {
+		if (stored.expiresAt < now) {
+			googleAuthCodes.delete(code);
+		}
+	}
+}, GOOGLE_AUTH_CODE_TTL_MS).unref?.();
+
 // Google OAuth routes
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
+router.post('/google/exchange', (req, res) => {
+	const { code } = req.body;
+
+	if (!code) {
+		return res.status(400).json({ message: 'Google auth code is required' });
+	}
+
+	const authPayload = consumeGoogleAuthCode(code);
+	if (!authPayload) {
+		return res.status(401).json({ message: 'Invalid or expired Google auth code' });
+	}
+
+	return res.json({
+		token: authPayload.token,
+		user: authPayload.user
+	});
+});
+
 router.get(
-	'/google/callback',
-	passport.authenticate('google', { session: false, failureRedirect: '/login?error=true' }),
+	'/google/callback', // Updated to use one-time code exchange
+	passport.authenticate('google', { session: false, failureRedirect: `${clientURL}/login?error=true` }),
 	(req, res) => {
 		try {
 			if (!req.user) {
-				return res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
+				return res.redirect(`${clientURL}/login?error=auth_failed`);
 			}
 
 			// Generate JWT token
@@ -48,13 +104,13 @@ router.get(
 				role: req.user.role,
 				profileImage: req.user.profileImage || req.user.avatarUrl
 			};
-			const userStr = encodeURIComponent(JSON.stringify(userObj));
+			const authCode = createGoogleAuthCode({ token, user: userObj });
 
-			// Redirect to CLIENT_URL with token and user details
-			res.redirect(`${process.env.CLIENT_URL}/login?token=${token}&user=${userStr}`);
+			// Redirect with a short-lived code instead of the full auth payload
+			res.redirect(`${clientURL}/login?code=${authCode}`);
 		} catch (error) {
 			console.error('Google callback error:', error);
-			res.redirect(`${process.env.CLIENT_URL}/login?error=server_error`);
+			res.redirect(`${clientURL}/login?error=server_error`);
 		}
 	}
 );
